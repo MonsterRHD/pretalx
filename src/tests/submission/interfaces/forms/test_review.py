@@ -12,7 +12,7 @@ from pretalx.submission.interfaces.forms import (
     ReviewSettingsForm,
 )
 from pretalx.submission.interfaces.forms.review import strip_zeroes
-from pretalx.submission.models import ReviewScore
+from pretalx.submission.models import ReviewScore, ReviewScoreCategory
 from tests.factories import (
     EventFactory,
     ReviewFactory,
@@ -407,6 +407,88 @@ def test_reviewscorecategoryform_affects_review_scores_no_changes():
     category = ReviewScoreCategoryFactory(event=event)
     ReviewScoreFactory(category=category, value=3, label="Good")
     data = _build_category_form_data(category)
+    form = ReviewScoreCategoryForm(
+        data=data, instance=category, event=event, locales=event.locales, prefix="cat"
+    )
+    assert form.is_valid(), form.errors
+
+    assert form.affects_review_scores is False
+
+
+def test_reviewscorecategoryform_affects_review_scores_new_option_on_existing():
+    event = EventFactory()
+    category = ReviewScoreCategoryFactory(event=event, is_independent=False)
+    ReviewScoreFactory(category=category, value=3, label="Good")
+    data = _build_category_form_data(
+        category,
+        overrides={"new_scores": "new1", "value_new1": "4", "label_new1": "Great"},
+    )
+    form = ReviewScoreCategoryForm(
+        data=data, instance=category, event=event, locales=event.locales, prefix="cat"
+    )
+    assert form.is_valid(), form.errors
+
+    assert form.affects_review_scores is True
+
+
+def test_reviewscorecategoryform_affects_review_scores_new_option_on_independent():
+    event = EventFactory()
+    category = ReviewScoreCategoryFactory(event=event, is_independent=True)
+    ReviewScoreFactory(category=category, value=3, label="Confident")
+    data = _build_category_form_data(
+        category,
+        overrides={
+            "new_scores": "new1",
+            "value_new1": "4",
+            "label_new1": "Very confident",
+        },
+    )
+    form = ReviewScoreCategoryForm(
+        data=data, instance=category, event=event, locales=event.locales, prefix="cat"
+    )
+    assert form.is_valid(), form.errors
+
+    assert form.affects_review_scores is False
+
+
+@pytest.mark.parametrize(("is_independent", "expected"), ((False, True), (True, False)))
+def test_reviewscorecategoryform_affects_review_scores_new_category(
+    is_independent, expected
+):
+    event = EventFactory()
+    category = ReviewScoreCategory(
+        event=event, name="Fresh", is_independent=is_independent
+    )
+    data = {
+        "cat-name_0": "Fresh",
+        "cat-is_independent": is_independent,
+        "cat-weight": "0" if is_independent else "1.0",
+        "cat-required": False,
+        "cat-active": True,
+        "cat-new_scores": "new1",
+        "cat-value_new1": "3",
+        "cat-label_new1": "Good",
+    }
+    form = ReviewScoreCategoryForm(
+        data=data, instance=category, event=event, locales=event.locales, prefix="cat"
+    )
+    assert form.is_valid(), form.errors
+
+    assert form.affects_review_scores is expected
+
+
+def test_reviewscorecategoryform_affects_review_scores_deleted_unsaved_row():
+    event = EventFactory()
+    category = ReviewScoreCategory(event=event, name="Never saved")
+    data = {
+        "cat-name_0": "Never saved",
+        "cat-is_independent": False,
+        "cat-weight": "1.0",
+        "cat-required": False,
+        "cat-active": True,
+        "cat-new_scores": "",
+        "cat-DELETE": True,
+    }
     form = ReviewScoreCategoryForm(
         data=data, instance=category, event=event, locales=event.locales, prefix="cat"
     )

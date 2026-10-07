@@ -4,49 +4,45 @@
 import itertools
 
 from django.core.exceptions import ValidationError
+from django.db import transaction
 from django.utils.timezone import now
 from django.utils.translation import gettext_lazy as _
 
+from pretalx.submission.domain.score_generation import (
+    recalculate_submission_review_scores,
+    refresh_review_scores,
+)
+
 
 def create_or_update_review(*, submission, user, text, scores=()):
-    review, created = submission.reviews.get_or_create(
-        user=user, defaults={"text": text}
-    )
-    if not created:
-        review.text = text
-        review.save()
-    review.scores.set(scores)
-    update_review_score(review)
-    return review
+    # Hold the review row across the m2m replacement and the generation
+    # fan-out so the batch worker never observes a half-written review.
+    with transaction.atomic():
+        review, created = submission.reviews.get_or_create(
+            user=user, defaults={"text": text}
+        )
+        # Lock before touching the m2m so the batch worker can never read a
+        # half-replaced score selection.
+        review = submission.reviews.select_for_update().get(pk=review.pk)
+        if not created:
+            review.text = text
+            review.save()
+        review.scores.set(scores)
+        return refresh_review_scores(review)
 
 
 def update_review_score(review):
-    """Recompute and persist ``review.score`` from its m2m ``scores``.
+    """Recompute the confirmed ``review.score`` and pending candidates.
 
-    Filters by the submission's currently applicable score categories
-    (which depend on the submission's track) and writes the result back.
+    The confirmed value follows the latest confirmed generation's frozen
+    rules (or the live config when no generation exists); pending
+    generations receive candidate rows.
     """
-    scores = list(
-        review.scores.select_related("category").filter(
-            category__in=review.submission.score_categories
-        )
-    )
-    review.score = sum(s.value * s.category.weight for s in scores) if scores else None
-    review.save()
-
-
-def recalculate_event_scores(event):
-    for review in event.reviews.select_related(
-        "submission__event", "submission__track"
-    ):
-        update_review_score(review)
+    return refresh_review_scores(review)
 
 
 def recalculate_submission_scores(submission):
-    for review in submission.reviews.select_related(
-        "submission__event", "submission__track"
-    ):
-        update_review_score(review)
+    recalculate_submission_review_scores(submission)
 
 
 def validate_review_phases(event):

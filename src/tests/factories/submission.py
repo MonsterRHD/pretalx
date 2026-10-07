@@ -1,6 +1,8 @@
 # SPDX-FileCopyrightText: 2026-present Tobias Kunze
 # SPDX-License-Identifier: AGPL-3.0-only WITH LicenseRef-Pretalx-AGPL-3.0-Terms
 import factory
+from django.db import models
+from django.utils import timezone
 from django_scopes import scopes_disabled
 
 from pretalx.submission.models import (
@@ -9,6 +11,8 @@ from pretalx.submission.models import (
     Review,
     ReviewScore,
     ReviewScoreCategory,
+    ScoreGeneration,
+    ScoreGenerationStatus,
     Submission,
     SubmissionInvitation,
     SubmissionType,
@@ -197,6 +201,33 @@ class ReviewScoreFactory(factory.django.DjangoModelFactory):
 
     @classmethod
     def _create(cls, model_class, *args, **kwargs):
+        with scopes_disabled():
+            return super()._create(model_class, *args, **kwargs)
+
+
+class ScoreGenerationFactory(factory.django.DjangoModelFactory):
+    class Meta:
+        model = ScoreGeneration
+
+    event = factory.SubFactory(EventFactory)
+    status = ScoreGenerationStatus.PENDING
+
+    @factory.lazy_attribute
+    def seq(self):
+        with scopes_disabled():
+            current = (
+                ScoreGeneration.objects.filter(event=self.event)
+                .aggregate(max_seq=models.Max("seq"))
+                .get("max_seq")
+            )
+        return (current or 0) + 1
+
+    @classmethod
+    def _create(cls, model_class, *args, **kwargs):
+        if kwargs.get("status") == ScoreGenerationStatus.CONFIRMED and not kwargs.get(
+            "confirmed_at"
+        ):
+            kwargs["confirmed_at"] = timezone.now()
         with scopes_disabled():
             return super()._create(model_class, *args, **kwargs)
 

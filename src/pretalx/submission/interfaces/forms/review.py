@@ -185,13 +185,40 @@ class ReviewScoreCategoryForm(PretalxI18nModelForm):
 
     @property
     def affects_review_scores(self):
-        """Whether saving this form would change Review.score for existing reviews."""
+        """Whether saving this form changes the total-score rule set.
+
+        Covers changes to existing ingredients (weight, active flag,
+        independent flag, track limits, existing option values, deletion) and
+        newly added score options on a non-independent category: those are new
+        total-score ingredients the next generation must be able to compute.
+        """
         if self.cleaned_data.get("DELETE"):
-            return not self.instance.is_independent
+            # Deleting an existing non-independent category removes scoring
+            # ingredients; a deleted-but-never-saved extra row changes nothing.
+            return bool(self.instance.id) and not self.instance.is_independent
+        if not self.instance.id:
+            # A brand-new category changes totals only if it ships selectable
+            # score options and is not independent. (Its weight/flag fields are
+            # always "changed" relative to an unsaved instance and would
+            # otherwise trigger recalculation on their own.)
+            if self.cleaned_data.get("is_independent"):
+                return False
+            return self._has_new_score_options()
         watched = {"weight", "active", "is_independent", "limit_tracks"} | {
             f"value_{entry['score'].id}" for entry in self.label_fields
         }
-        return bool(watched.intersection(self.changed_data))
+        if watched.intersection(self.changed_data):
+            return True
+        if self.cleaned_data.get("is_independent", self.instance.is_independent):
+            return False
+        return self._has_new_score_options()
+
+    def _has_new_score_options(self) -> bool:
+        return any(
+            self.cleaned_data.get(f"value_{label_id}") is not None
+            and self.cleaned_data.get(f"label_{label_id}")
+            for label_id in self.new_label_ids
+        )
 
     def clean(self):
         cleaned_data = super().clean()

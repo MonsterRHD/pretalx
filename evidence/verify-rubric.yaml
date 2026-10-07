@@ -1,0 +1,25 @@
+rubrics:
+  - id: 1
+    type: f2p
+    text: 影响总分的 category、score value、weight、active 和 track 限制保存后生成唯一持久配置代际。
+  - id: 2
+    type: f2p
+    text: 重算把结果写入与当前 review.score 隔离的候选，未完成时所有消费者仍看到上一确认分数。
+  - id: 3
+    type: f2p
+    text: 任务为遍历范围和完成项记录可恢复进度，worker 退出后只继续未完成 review。
+  - id: 4
+    type: f2p
+    text: 后续设置修改会使旧 generation 永久失去发布资格，旧任务晚到不能覆盖新候选或确认值。
+  - id: 5
+    type: f2p
+    text: 重算期间新增或修改 review 会按目标 generation 计算，批任务与即时更新不会互相覆盖。
+  - id: 6
+    type: f2p
+    text: 只有目标范围全部完成并验证后才一次确认新分数，候选失败不会暴露部分结果。
+  - id: 7
+    type: p2p
+    text: 仪表盘、排序、median/mean、API、表格和导出只读取同一确认代际。
+  - id: 8
+    type: p2p
+    text: independent category、不影响总分的编辑和无批量重算时的单条 review 更新保持通过。

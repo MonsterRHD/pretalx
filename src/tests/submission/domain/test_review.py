@@ -12,7 +12,6 @@ from pretalx.common.models import ActivityLog
 from pretalx.submission.domain.review import (
     activate_review_phase,
     create_or_update_review,
-    recalculate_event_scores,
     recalculate_submission_scores,
     update_review_phase,
     update_review_score,
@@ -130,21 +129,6 @@ def test_update_review_score_filters_by_submission_categories():
     review.refresh_from_db()
 
     assert review.score is None
-
-
-def test_recalculate_event_scores():
-    event = EventFactory()
-    category = ReviewScoreCategoryFactory(event=event, weight=Decimal("1.0"))
-    score = ReviewScoreFactory(category=category, value=Decimal(5))
-    submission = SubmissionFactory(event=event)
-    review = ReviewFactory(submission=submission, score=None)
-    review.scores.add(score)
-
-    with scope(event=event):
-        recalculate_event_scores(event)
-
-    review.refresh_from_db()
-    assert review.score == Decimal("5.0")
 
 
 def test_recalculate_submission_scores():

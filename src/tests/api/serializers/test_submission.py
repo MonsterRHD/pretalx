@@ -1058,8 +1058,10 @@ def test_submission_orga_serializer_update_track_change_recalculates_review_scor
     serializer.update(submission, {"track": track_b})
     review.refresh_from_db()
 
-    # The review was re-saved by update_review_scores
-    assert review.updated > original_updated
+    # The score is recomputed (track_a-only category no longer applies), while
+    # Review.updated marks content edits and must not move on propagation.
+    assert review.score is None
+    assert review.updated == original_updated
 
 
 def test_submission_orga_serializer_get_invitations():

@@ -48,6 +48,7 @@ from pretalx.submission.domain.queries.review import (
     annotate_user_review_score,
     review_view_submissions,
 )
+from pretalx.submission.domain.review import update_review_score
 from pretalx.submission.domain.queries.submission import (
     reviewable_submissions_for_user,
     unreviewed_submissions_for_user,
@@ -785,9 +786,10 @@ class ReviewSubmission(ReviewViewMixin, PermissionRequired, CreateOrUpdateView):
     def post(self, request, *args, **kwargs):
         action = self.request.POST.get("review_submit") or "save"
         if action == "abstain":
-            Review.objects.get_or_create(
+            review, _ = Review.objects.get_or_create(
                 user=self.request.user, submission=self.submission
             )
+            update_review_score(review)
             return redirect(self.get_success_url())
         if action == "skip_for_now":
             key = f"{self.request.event.slug}_ignored_reviews"

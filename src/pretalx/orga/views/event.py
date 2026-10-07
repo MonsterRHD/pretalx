@@ -98,6 +98,7 @@ from pretalx.submission.domain.review import (
     activate_review_phase,
     validate_review_phases,
 )
+from pretalx.submission.domain.score_generation import commit_score_generation
 from pretalx.submission.enums import QuestionTarget
 from pretalx.submission.interfaces.forms import (
     ReviewPhaseForm,
@@ -105,7 +106,7 @@ from pretalx.submission.interfaces.forms import (
     ReviewSettingsForm,
 )
 from pretalx.submission.models import CfP, ReviewPhase, ReviewScoreCategory
-from pretalx.submission.tasks import task_recalculate_review_scores
+from pretalx.submission.tasks import task_apply_score_generation
 
 
 class EventSettingsPermission(EventPermissionRequired):
@@ -381,9 +382,17 @@ class EventReviewSettings(EventSettingsPermission, FormView):
             force=changed,
         ):
             form.save()
-        if any(f.affects_review_scores for f in self.scores_formset.initial_forms):
-            task_recalculate_review_scores.apply_async(
-                kwargs={"event_id": self.request.event.pk}, ignore_result=True
+        saved_score_forms = [
+            form
+            for form in self.scores_formset.forms
+            if form.has_changed()
+        ]
+        if any(form.affects_review_scores for form in saved_score_forms):
+            generation = commit_score_generation(self.request.event)
+            transaction.on_commit(
+                lambda: task_apply_score_generation.apply_async(
+                    kwargs={"generation_id": generation.pk}, ignore_result=True
+                )
             )
         return super().form_valid(form)
 

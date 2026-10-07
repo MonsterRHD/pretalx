@@ -11,12 +11,15 @@ from django.core.cache import cache
 from django_scopes import scopes_disabled
 
 from pretalx.mail.enums import QueuedMailStates
+from pretalx.submission.domain import score_generation as sg
 from pretalx.submission.models import SubmissionStates
 from pretalx.submission.models.question import QuestionRequired, QuestionVariant
 from tests.factories import (
     EventFactory,
     QuestionFactory,
     ReviewFactory,
+    ReviewScoreCategoryFactory,
+    ReviewScoreFactory,
     SpeakerFactory,
     SubmissionFactory,
     SubmissionTypeFactory,
@@ -92,6 +95,60 @@ def test_review_dashboard_sort_query_count(
 
     assert response.status_code == 200
     assert submission.title in response.content.decode()
+
+
+def test_review_dashboard_reads_only_confirmed_generation_until_switch(client):
+    """G1 ranks sub_x(5) above sub_y(2); G2 deactivates x's category."""
+    event = EventFactory()
+    orga = make_orga_user(event)
+    with scopes_disabled():
+        event.score_categories.all().delete()
+        category_a = ReviewScoreCategoryFactory(event=event, weight=1)
+        category_b = ReviewScoreCategoryFactory(event=event, weight=1)
+        score_a = ReviewScoreFactory(category=category_a, value=2)
+        score_b = ReviewScoreFactory(category=category_b, value=5)
+        sub_x = SubmissionFactory(event=event)
+        sub_y = SubmissionFactory(event=event)
+        review_x = ReviewFactory(submission=sub_x, user=UserFactory(), score=None)
+        review_y = ReviewFactory(submission=sub_y, user=UserFactory(), score=None)
+        review_x.scores.add(score_b)
+        review_y.scores.add(score_a)
+
+        sg.ensure_baseline_generation(event)
+        sg.refresh_review_scores(review_x)
+        sg.refresh_review_scores(review_y)
+        category_b.active = False
+        category_b.save()
+        g2 = sg.commit_score_generation(event)
+        # Half-finished recalculation: only x has a G2 candidate (None).
+        sg.refresh_review_scores(review_x)
+
+    client.force_login(orga)
+
+    response = client.get(event.orga_urls.reviews)
+    content = response.content.decode()
+    assert response.status_code == 200
+    # G1 ranking and G1 aggregate values, no G2 leakage mid-recalculation.
+    assert content.index(sub_x.title) < content.index(sub_y.title)
+    assert "5.0" in content
+    assert "2.0" in content
+
+    # review_fragment.html renders the per-review total from Review.score via
+    # Review.display_score ("5" / "×" for no score).
+    fragment = client.get(sub_x.orga_urls.reviews).content.decode()
+    assert '<td class="numeric-left">5</td>' in fragment
+
+    with scopes_disabled():
+        assert sg.run_generation(g2.id) == "confirmed"
+
+    response = client.get(event.orga_urls.reviews)
+    content = response.content.decode()
+    # G2 ranking: y(2) now precedes x(no score).
+    assert content.index(sub_y.title) < content.index(sub_x.title)
+
+    fragment = client.get(sub_x.orga_urls.reviews).content.decode()
+    assert '<td class="numeric-left">5</td>' not in fragment
+    assert '<td class="numeric-left">×</td>' in fragment
 
 
 @pytest.mark.parametrize("item_count", (1, 3))

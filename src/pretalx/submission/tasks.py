@@ -3,7 +3,7 @@
 
 import logging
 
-from django_scopes import scope
+from django_scopes import scope, scopes_disabled
 
 from pretalx.celery_app import app
 from pretalx.common.exceptions import SendMailException
@@ -11,20 +11,53 @@ from pretalx.common.exceptions import SendMailException
 LOGGER = logging.getLogger(__name__)
 
 
-@app.task(name="pretalx.submission.recalculate_review_scores")
-def task_recalculate_review_scores(*, event_id: int):
-    from pretalx.event.models import Event  # noqa: PLC0415 -- leaf
-    from pretalx.submission.domain.review import (  # noqa: PLC0415 -- leaf
-        recalculate_event_scores,
+@app.task(
+    name="pretalx.submission.apply_score_generation",
+    acks_late=True,
+    reject_on_worker_lost=True,
+    ignore_result=True,
+)
+def task_apply_score_generation(*, generation_id: int, attempt: int = 0):
+    from pretalx.submission.domain.score_generation import (  # noqa: PLC0415 -- leaf
+        run_generation,
     )
+    from pretalx.submission.models import ScoreGeneration  # noqa: PLC0415 -- leaf
 
-    event = Event.objects.filter(pk=event_id).first()
-    if not event:
-        LOGGER.error("Could not find Event ID %s for review recalculation.", event_id)
+    max_attempts = 5
+    with scopes_disabled():
+        generation = (
+            ScoreGeneration.objects.select_related("event")
+            .filter(pk=generation_id)
+            .first()
+        )
+    if not generation:
+        LOGGER.error(
+            "Could not find ScoreGeneration ID %s for review recalculation.",
+            generation_id,
+        )
         return
 
-    with scope(event=event):
-        recalculate_event_scores(event)
+    with scope(event=generation.event):
+        outcome = run_generation(generation_id)
+
+    # Reviews kept changing while the worker ran: back off and retry a bounded
+    # number of times. Every attempt is an idempotent resume from persisted
+    # candidates, so giving up leaves a consistent state (confirmed reads are
+    # unaffected) and a later settings commit re-enqueues the event.
+    if outcome == "incomplete" and attempt < max_attempts:
+        task_apply_score_generation.apply_async(
+            kwargs={"generation_id": generation_id, "attempt": attempt + 1},
+            countdown=60,
+            ignore_result=True,
+        )
+    elif outcome == "incomplete":
+        LOGGER.error(
+            "ScoreGeneration %s still incomplete after %s attempts; "
+            "staying on the previous confirmed generation.",
+            generation_id,
+            max_attempts,
+        )
+    return outcome
 
 
 @app.task(name="pretalx.submission.export_question_files")

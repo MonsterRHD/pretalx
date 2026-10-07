@@ -6,6 +6,7 @@ from decimal import Decimal
 import pytest
 from django_scopes import scopes_disabled
 
+from pretalx.submission.domain import score_generation as sg
 from pretalx.submission.domain.review import update_review_score
 from pretalx.submission.models import QuestionVariant, Review
 from pretalx.submission.models.question import QuestionRequired
@@ -44,6 +45,53 @@ def _make_other_review(event, other_submission):
     return ReviewFactory(
         submission=other_submission, user=other_user, text="Looks horrible!"
     )
+
+
+def test_review_and_submission_api_read_confirmed_generation_until_switch(
+    client, orga_read_token, event, submission, review_user
+):
+    """G1 score is 5 (category B active); G2 deactivates B -> score None."""
+    with scopes_disabled():
+        category_b = ReviewScoreCategoryFactory(event=event, name="B", weight=1)
+        score_b = ReviewScoreFactory(category=category_b, value=5)
+        review = ReviewFactory(submission=submission, user=review_user, score=None)
+        review.scores.add(score_b)
+        sg.ensure_baseline_generation(event)
+        sg.refresh_review_scores(review)
+        category_b.active = False
+        category_b.save()
+        g2 = sg.commit_score_generation(event)
+        # Half-finished window: candidate for the new generation already says
+        # None, but no consumer may see it yet.
+        sg.refresh_review_scores(review)
+
+    headers = {"Authorization": f"Token {orga_read_token.token}"}
+
+    response = client.get(event.api_urls.reviews, headers=headers)
+    result = next(r for r in response.json()["results"] if r["id"] == review.pk)
+    assert response.status_code == 200
+    assert result["score"] == "5.00"
+
+    response = client.get(event.api_urls.submissions, headers=headers)
+    api_submission = next(
+        row for row in response.json()["results"] if row["code"] == submission.code
+    )
+    assert api_submission["median_score"] == 5.0
+    assert api_submission["mean_score"] == 5.0
+
+    with scopes_disabled():
+        assert sg.run_generation(g2.id) == "confirmed"
+
+    response = client.get(event.api_urls.reviews, headers=headers)
+    result = next(r for r in response.json()["results"] if r["id"] == review.pk)
+    assert result["score"] is None
+
+    response = client.get(event.api_urls.submissions, headers=headers)
+    api_submission = next(
+        row for row in response.json()["results"] if row["code"] == submission.code
+    )
+    assert api_submission["median_score"] is None
+    assert api_submission["mean_score"] is None
 
 
 def test_reviewviewset_list_anonymous_returns_401(

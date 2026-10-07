@@ -21,6 +21,11 @@ from pretalx.mail.smtp import CustomSMTPBackend
 from pretalx.orga.signals import activate_event
 from pretalx.person.enums import EmailVerificationState
 from pretalx.person.models import User
+from pretalx.submission.models import (
+    ScoreGeneration,
+    ScoreGenerationOption,
+    ScoreGenerationStatus,
+)
 from tests.factories import (
     ActivityLogFactory,
     EventFactory,
@@ -565,26 +570,61 @@ def test_event_review_settings_post_updates_score_category(client, event):
 
 
 def test_event_review_settings_post_dispatches_recalc_on_weight_change(
-    client, event, monkeypatch
+    client, event, monkeypatch, django_capture_on_commit_callbacks
 ):
     user = make_orga_user(event, can_change_event_settings=True)
     client.force_login(user)
     data = _build_review_settings_data(event)
     data["scores-0-weight"] = "5"
-    captured = {}
+    captured = []
     monkeypatch.setattr(
-        "pretalx.orga.views.event.task_recalculate_review_scores.apply_async",
-        lambda **kw: captured.update(kw),
+        "pretalx.orga.views.event.task_apply_score_generation.apply_async",
+        lambda **kw: captured.append(kw),
     )
 
-    response = client.post(event.orga_urls.review_settings, data, follow=True)
+    with django_capture_on_commit_callbacks(execute=True):
+        response = client.post(event.orga_urls.review_settings, data, follow=True)
 
     assert response.status_code == 200
-    assert captured["kwargs"] == {"event_id": event.pk}
+    with scope(event=event):
+        pending = ScoreGeneration.objects.get(
+            event=event, status=ScoreGenerationStatus.PENDING
+        )
+    assert captured[0]["kwargs"] == {"generation_id": pending.pk}
+
+
+def test_event_review_settings_post_commits_generation_for_new_option(
+    client, event, monkeypatch, django_capture_on_commit_callbacks
+):
+    user = make_orga_user(event, can_change_event_settings=True)
+    client.force_login(user)
+    data = _build_review_settings_data(event)
+    data["scores-0-new_scores"] = "new1"
+    data["scores-0-value_new1"] = "4"
+    data["scores-0-label_new1"] = "Great"
+    captured = []
+    monkeypatch.setattr(
+        "pretalx.orga.views.event.task_apply_score_generation.apply_async",
+        lambda **kw: captured.append(kw),
+    )
+
+    with django_capture_on_commit_callbacks(execute=True):
+        response = client.post(event.orga_urls.review_settings, data, follow=True)
+
+    assert response.status_code == 200
+    with scope(event=event):
+        generation = ScoreGeneration.objects.get(
+            event=event, status=ScoreGenerationStatus.PENDING
+        )
+        frozen = ScoreGenerationOption.objects.filter(
+            category__generation=generation, value=4
+        )
+        assert frozen.exists()
+    assert captured[0]["kwargs"] == {"generation_id": generation.pk}
 
 
 def test_event_review_settings_post_does_not_dispatch_recalc_when_unaffected(
-    client, event, monkeypatch
+    client, event, monkeypatch, django_capture_on_commit_callbacks
 ):
     user = make_orga_user(event, can_change_event_settings=True)
     client.force_login(user)
@@ -592,14 +632,17 @@ def test_event_review_settings_post_does_not_dispatch_recalc_when_unaffected(
     data["scores-0-name_0"] = "Renamed Category"
     calls = []
     monkeypatch.setattr(
-        "pretalx.orga.views.event.task_recalculate_review_scores.apply_async",
+        "pretalx.orga.views.event.task_apply_score_generation.apply_async",
         lambda **kw: calls.append(kw),
     )
 
-    response = client.post(event.orga_urls.review_settings, data, follow=True)
+    with django_capture_on_commit_callbacks(execute=True):
+        response = client.post(event.orga_urls.review_settings, data, follow=True)
 
     assert response.status_code == 200
     assert calls == []
+    with scope(event=event):
+        assert ScoreGeneration.objects.filter(event=event).count() == 0
 
 
 def test_event_review_settings_add_new_phase(client, event):

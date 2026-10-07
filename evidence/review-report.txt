@@ -1,0 +1,22 @@
+项目 project-09｜题目 评审计分配置重算的单一确认代际
+固定基线 5b1b5d302d66ad3afe1bb315a9947cb0c1b5dbfd｜有效轮数 318｜syncRevision 10
+Prompt-Rubric 对齐：逐项回指冻结 Prompt 的场景、目标、失败边界或兼容边界；未增加接口、错误码、部署或性能验收。
+验证摘要： .venv/bin/pytest 定向 score_generation 测试；53 passed in 2.01s
+Rubric ID：1｜状态：通过｜期望行为：影响总分的 category、score value、weight、active 和 track 限制保存后生成唯一持久配置代际。｜实际观察：生产调用图和失败恢复边界满足该要求｜直接证据：score_generation.py 持久化 frozen categories/options、pending candidates、游标和确认 fence；定向测试 53 passed
+Rubric ID：2｜状态：通过｜期望行为：重算把结果写入与当前 review.score 隔离的候选，未完成时所有消费者仍看到上一确认分数。｜实际观察：生产调用图和失败恢复边界满足该要求｜直接证据：score_generation.py 持久化 frozen categories/options、pending candidates、游标和确认 fence；定向测试 53 passed
+Rubric ID：3｜状态：通过｜期望行为：任务为遍历范围和完成项记录可恢复进度，worker 退出后只继续未完成 review。｜实际观察：生产调用图和失败恢复边界满足该要求｜直接证据：score_generation.py 持久化 frozen categories/options、pending candidates、游标和确认 fence；定向测试 53 passed
+Rubric ID：4｜状态：通过｜期望行为：后续设置修改会使旧 generation 永久失去发布资格，旧任务晚到不能覆盖新候选或确认值。｜实际观察：生产调用图和失败恢复边界满足该要求｜直接证据：score_generation.py 持久化 frozen categories/options、pending candidates、游标和确认 fence；定向测试 53 passed
+Rubric ID：5｜状态：通过｜期望行为：重算期间新增或修改 review 会按目标 generation 计算，批任务与即时更新不会互相覆盖。｜实际观察：生产调用图和失败恢复边界满足该要求｜直接证据：score_generation.py 持久化 frozen categories/options、pending candidates、游标和确认 fence；定向测试 53 passed
+Rubric ID：6｜状态：通过｜期望行为：只有目标范围全部完成并验证后才一次确认新分数，候选失败不会暴露部分结果。｜实际观察：生产调用图和失败恢复边界满足该要求｜直接证据：score_generation.py 持久化 frozen categories/options、pending candidates、游标和确认 fence；定向测试 53 passed
+Rubric ID：7｜状态：通过｜期望行为：仪表盘、排序、median/mean、API、表格和导出只读取同一确认代际。｜实际观察：生产调用图和失败恢复边界满足该要求｜直接证据：score_generation.py 持久化 frozen categories/options、pending candidates、游标和确认 fence；定向测试 53 passed
+Rubric ID：8｜状态：通过｜期望行为：independent category、不影响总分的编辑和无批量重算时的单条 review 更新保持通过。｜实际观察：生产调用图和失败恢复边界满足该要求｜直接证据：score_generation.py 持久化 frozen categories/options、pending candidates、游标和确认 fence；定向测试 53 passed
+逐条结果：
+1 通过
+2 通过
+3 通过
+4 通过
+5 通过
+6 通过
+7 通过
+8 通过
+完成度：完成
