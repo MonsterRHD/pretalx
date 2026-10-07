@@ -1,6 +1,8 @@
 # SPDX-FileCopyrightText: 2026-present Tobias Kunze
 # SPDX-License-Identifier: AGPL-3.0-only WITH LicenseRef-Pretalx-AGPL-3.0-Terms
 
+import datetime as dt
+
 import pytest
 from django_scopes import scope, scopes_disabled
 
@@ -8,6 +10,8 @@ from pretalx.schedule.domain.release import freeze_schedule
 from pretalx.schedule.models import Schedule
 from pretalx.submission.models import SubmissionStates
 from tests.factories import (
+    AttendeeProfileFactory,
+    AttendeeSignupFactory,
     EventFactory,
     ResourceFactory,
     RoomFactory,
@@ -17,6 +21,7 @@ from tests.factories import (
     TagFactory,
     TalkSlotFactory,
     TrackFactory,
+    UserFactory,
 )
 
 pytestmark = [pytest.mark.integration, pytest.mark.django_db]
@@ -227,6 +232,54 @@ def test_schedule_release_orga_success(client, orga_write_token, public_schedule
         released = event.schedules.get(version="v_new")
         assert str(released.comment) == "Test comment"
         assert event.schedules.count() == initial_count + 1
+
+
+def test_schedule_release_signup_conflict_fails(
+    client, orga_write_token, public_schedule_event
+):
+    event, slot = public_schedule_event
+    with scopes_disabled():
+        event.feature_flags["attendee_signup"] = True
+        event.save()
+        sub_type = event.cfp.default_type
+        sub_type.attendee_signup_required = True
+        sub_type.save()
+        first = slot.submission
+        overlapping = SubmissionFactory(
+            event=event,
+            state=SubmissionStates.CONFIRMED,
+            submission_type=sub_type,
+            attendee_signup_capacity=10,
+        )
+        TalkSlotFactory(
+            submission=overlapping,
+            schedule=event.wip_schedule,
+            room=RoomFactory(event=event, capacity=20),
+            is_visible=True,
+            start=event.datetime_from + dt.timedelta(minutes=30),
+            end=event.datetime_from + dt.timedelta(minutes=90),
+        )
+        profile = AttendeeProfileFactory(event=event, user=UserFactory())
+        AttendeeSignupFactory(submission=first, attendee=profile)
+        AttendeeSignupFactory(submission=overlapping, attendee=profile)
+
+    response = client.post(
+        event.api_urls.schedules + "release/",
+        data={"version": "v2"},
+        content_type="application/json",
+        headers={"Authorization": f"Token {orga_write_token.token}"},
+    )
+
+    assert response.status_code == 400
+    data = response.json()
+    assert "conflicts" in data
+    codes = {code for entry in data["conflicts"] for code in (
+        entry["sessions"][0]["code"],
+        entry["sessions"][1]["code"],
+    )}
+    assert codes == {first.code, overlapping.code}
+    with scopes_disabled():
+        assert not event.schedules.filter(version="v2").exists()
 
 
 def test_schedule_release_duplicate_version_fails(

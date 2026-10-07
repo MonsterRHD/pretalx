@@ -26,6 +26,7 @@ from pretalx.api.serializers.schedule import (
     TalkSlotSerializer,
 )
 from pretalx.api.views.mixins import PretalxViewSetMixin
+from pretalx.common.exceptions import ScheduleConflictError
 from pretalx.common.exporter import get_schedule_exporter_content
 from pretalx.schedule.domain.ical import get_slot_ical
 from pretalx.schedule.domain.queries.schedule import get_schedule, public_talk_slots
@@ -163,7 +164,11 @@ class ScheduleViewSet(PretalxViewSetMixin, viewsets.ReadOnlyModelViewSet):
                 response=ScheduleSerializer,
             ),
             400: OpenApiResponse(
-                description="Invalid data provided (e.g., version name already exists)."
+                description=(
+                    "Invalid data provided (e.g., version name already exists) or "
+                    "the release would leave attendees with overlapping confirmed "
+                    "signups; the response lists the affected attendees and sessions."
+                )
             ),
             403: OpenApiResponse(description="Permission denied."),
         },
@@ -177,13 +182,44 @@ class ScheduleViewSet(PretalxViewSetMixin, viewsets.ReadOnlyModelViewSet):
         version_name = serializer.validated_data.get("version")
         comment = serializer.validated_data.get("comment")
 
-        schedule, _ = freeze_schedule(
-            wip_schedule,
-            name=version_name,
-            user=request.user,
-            notify_speakers=False,
-            comment=comment,
-        )
+        try:
+            schedule, _ = freeze_schedule(
+                wip_schedule,
+                name=version_name,
+                user=request.user,
+                notify_speakers=False,
+                comment=comment,
+            )
+        except ScheduleConflictError as exc:
+            return Response(
+                {
+                    "detail": (
+                        "The schedule cannot be released because some attendees "
+                        "have overlapping confirmed signups. Cancel or adjust the "
+                        "signups listed below, then try again."
+                    ),
+                    "conflicts": [
+                        {
+                            "attendee": {
+                                "name": entry["attendee"].user.name or "",
+                                "email": entry["attendee"].user.email,
+                            },
+                            "sessions": [
+                                {
+                                    "code": entry["submission_a"].code,
+                                    "title": entry["submission_a"].title,
+                                },
+                                {
+                                    "code": entry["submission_b"].code,
+                                    "title": entry["submission_b"].title,
+                                },
+                            ],
+                        }
+                        for entry in exc.conflicts
+                    ],
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
         response_serializer = ScheduleSerializer(
             schedule, context=self.get_serializer_context()

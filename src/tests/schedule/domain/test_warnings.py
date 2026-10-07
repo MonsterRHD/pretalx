@@ -17,6 +17,7 @@ from pretalx.schedule.models import TalkSlot
 from pretalx.schedule.models.slot import SlotType
 from pretalx.submission.models import Submission, SubmissionStates
 from tests.factories import (
+    AttendeeProfileFactory,
     AttendeeSignupFactory,
     AvailabilityFactory,
     EventFactory,
@@ -25,6 +26,7 @@ from tests.factories import (
     SubmissionFactory,
     TalkSlotFactory,
     TrackFactory,
+    UserFactory,
 )
 
 pytestmark = [pytest.mark.unit, pytest.mark.django_db]
@@ -789,6 +791,7 @@ def test_compute_signup_warnings_ignores_signup_not_required(room_capacity):
         "signup_no_capacity": [],
         "signup_overfull": [],
         "signup_dropped_with_attendees": [],
+        "signup_conflicts": [],
     }
 
 

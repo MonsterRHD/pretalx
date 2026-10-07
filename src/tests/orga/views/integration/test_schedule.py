@@ -8,14 +8,16 @@ import pytest
 from django.contrib.messages import constants as message_constants
 from django.contrib.messages import get_messages
 from django.core.files.base import ContentFile
-from django_scopes import scopes_disabled
+from django_scopes import scope, scopes_disabled
 
 from pretalx.common.models.file import CachedFile
 from pretalx.event.models import Event
 from pretalx.mail.domain.template import mail_template_by_role
 from pretalx.mail.enums import MailTemplateRoles
+from pretalx.schedule.domain.release import freeze_schedule
 from pretalx.schedule.models import Room, Schedule, TalkSlot
 from pretalx.schedule.models.slot import SlotType
+from pretalx.submission.domain.signup import cancel_signup, create_signup
 from pretalx.submission.models import SubmissionStates
 from tests.factories import (
     AnswerFactory,
@@ -286,13 +288,117 @@ def test_schedule_release_expand_capacity_applied(client, event):
     assert entry.data["changes"]["attendee_signup_capacity"] == {"old": 10, "new": 300}
 
 
+def _event_with_two_signed_up_sessions(event, attendee):
+    """Release v1 with two back-to-back sessions the attendee signed up
+    for, then move the second one so it overlaps the first in the WIP."""
+    event.feature_flags["attendee_signup"] = True
+    event.save()
+    sub_type = event.cfp.default_type
+    sub_type.attendee_signup_required = True
+    sub_type.save()
+    rooms = [RoomFactory(event=event, capacity=20), RoomFactory(event=event, capacity=20)]
+    submissions = []
+    for index, room in enumerate(rooms):
+        submission = SubmissionFactory(
+            event=event,
+            state=SubmissionStates.CONFIRMED,
+            submission_type=sub_type,
+            attendee_signup_capacity=10,
+            title=f"Overlap Session {index}",
+        )
+        TalkSlotFactory(
+            submission=submission,
+            schedule=event.wip_schedule,
+            room=room,
+            start=event.datetime_from + dt.timedelta(hours=index),
+            end=event.datetime_from + dt.timedelta(hours=index + 1),
+            is_visible=True,
+        )
+        submissions.append(submission)
+    freeze_schedule(event.wip_schedule, "v1", notify_speakers=False)
+    for submission in submissions:
+        create_signup(submission, user=attendee)
+    moved = event.wip_schedule.talks.get(submission=submissions[1])
+    moved.start = event.datetime_from + dt.timedelta(minutes=30)
+    moved.end = event.datetime_from + dt.timedelta(minutes=90)
+    moved.save(update_fields=["start", "end"])
+    return submissions
+
+
+def test_schedule_release_page_lists_signup_conflicts(client, event):
+    with scopes_disabled():
+        attendee = UserFactory(email="doublebooked@example.com")
+        _event_with_two_signed_up_sessions(event, attendee)
+        orga_user = make_orga_user(event, can_change_submissions=True)
+    client.force_login(orga_user)
+
+    response = client.get(event.orga_urls.release_schedule)
+
+    assert response.status_code == 200
+    body = response.content.decode()
+    assert "Release blocked" in body
+    assert "doublebooked@example.com" in body
+    assert "Overlap Session 0" in body
+    assert "Overlap Session 1" in body
+    assert "signup-conflicts" in body
+
+
+def test_schedule_release_post_blocked_by_signup_conflicts(client, event):
+    with scopes_disabled():
+        attendee = UserFactory()
+        _event_with_two_signed_up_sessions(event, attendee)
+        orga_user = make_orga_user(event, can_change_submissions=True)
+    client.force_login(orga_user)
+
+    response = client.post(
+        event.orga_urls.release_schedule,
+        data={"version": "v2", "comment": "", "notify_speakers": "on"},
+    )
+
+    assert response.status_code == 200
+    with scopes_disabled():
+        assert not Schedule.objects.filter(event=event, version="v2").exists()
+        current = event.schedules.filter(version="v1").first()
+        assert current is not None
+        assert event.schedules.filter(version__isnull=True).count() == 1
+
+
+def test_schedule_release_post_succeeds_after_conflict_resolved(client, event):
+    with scopes_disabled():
+        attendee = UserFactory()
+        submissions = _event_with_two_signed_up_sessions(event, attendee)
+        orga_user = make_orga_user(event, can_change_submissions=True)
+    client.force_login(orga_user)
+
+    blocked = client.post(
+        event.orga_urls.release_schedule,
+        data={"version": "v2", "comment": "", "notify_speakers": "on"},
+    )
+    assert blocked.status_code == 200
+
+    # The attendee cancels one of the overlapping signups; re-validating
+    # and releasing now works.
+    with scope(event=event):
+        cancel_signup(submissions[1], user=attendee)
+
+    response = client.post(
+        event.orga_urls.release_schedule,
+        data={"version": "v2", "comment": "", "notify_speakers": "on"},
+        follow=False,
+    )
+
+    assert response.status_code == 302
+    with scopes_disabled():
+        released = Schedule.objects.filter(event=event, version="v2").first()
+        assert released is not None
+
+
 def test_schedule_toggle_flips_visibility(client, event):
     with scopes_disabled():
         user = make_orga_user(event, can_change_event_settings=True)
     client.force_login(user)
 
     response = client.post(event.orga_urls.toggle_schedule, follow=True)
-
     assert response.status_code == 200
     updated = Event.objects.get(pk=event.pk)
     assert updated.feature_flags["show_schedule"] is False

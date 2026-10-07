@@ -11,7 +11,6 @@ from csp.decorators import csp_update
 from django.conf import settings
 from django.contrib import messages
 from django.core.exceptions import ValidationError
-from django.db import transaction
 from django.db.models.deletion import ProtectedError
 from django.http import JsonResponse
 from django.shortcuts import get_object_or_404, redirect
@@ -27,6 +26,7 @@ from i18nfield.strings import LazyI18nString
 from i18nfield.utils import I18nJSONEncoder
 
 from pretalx.agenda.tasks import task_export_schedule_html
+from pretalx.common.exceptions import ScheduleConflictError
 from pretalx.common.exporter import get_schedule_exporters
 from pretalx.common.language import get_current_language_information
 from pretalx.common.models.file import CachedFile
@@ -279,16 +279,32 @@ class ScheduleReleaseView(EventPermissionRequired, FormView):
         )
         return super().form_invalid(form)
 
-    @transaction.atomic
     def form_valid(self, form):
+        try:
+            freeze_schedule(
+                self.request.event.wip_schedule,
+                name=form.cleaned_data["version"],
+                user=self.request.user,
+                notify_speakers=form.cleaned_data["notify_speakers"],
+                comment=form.cleaned_data["comment"],
+            )
+        except ScheduleConflictError:
+            # Defense in depth against a signup that landed after the
+            # form's conflict check: freeze_schedule rolled back atomically,
+            # so the previous public schedule is still in effect and the
+            # release page (re-rendered here) lists the affected attendees.
+            messages.error(
+                self.request,
+                _(
+                    "The schedule could not be released because some attendees "
+                    "have overlapping confirmed signups. Please cancel or adjust "
+                    "these signups, then try again."
+                ),
+            )
+            return self.render_to_response(self.get_context_data(form=form))
+        # Only expand capacities once the release itself has committed;
+        # the expansion is independent and has its own transaction.
         form.apply_expand_capacity(user=self.request.user)
-        freeze_schedule(
-            self.request.event.wip_schedule,
-            name=form.cleaned_data["version"],
-            user=self.request.user,
-            notify_speakers=form.cleaned_data["notify_speakers"],
-            comment=form.cleaned_data["comment"],
-        )
         messages.success(self.request, _("Nice, your schedule has been released!"))
         return redirect(self.request.event.orga_urls.schedule)
 

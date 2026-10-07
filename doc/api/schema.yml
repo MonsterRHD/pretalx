@@ -2422,7 +2422,9 @@ paths:
                 $ref: '#/components/schemas/Schedule'
           description: Schedule released successfully.
         '400':
-          description: Invalid data provided (e.g., version name already exists).
+          description: Invalid data provided (e.g., version name already exists) or
+            the release would leave attendees with overlapping confirmed signups;
+            the response lists the affected attendees and sessions.
         '403':
           description: Permission denied.
   /api/events/{event}/slots/:

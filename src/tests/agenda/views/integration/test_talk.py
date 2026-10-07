@@ -1022,3 +1022,111 @@ def test_signup_post_returns_404_when_submission_not_public(
     response = client.post(signup_submission.urls.signup, follow=False)
 
     assert response.status_code == 404
+
+
+def _two_overlapping_signup_sessions(
+    event, *, titles=("First session", "Second session")
+):
+    sub_type = SubmissionTypeFactory(event=event, attendee_signup_required=True)
+    rooms = [
+        RoomFactory(event=event, capacity=20),
+        RoomFactory(event=event, capacity=20),
+    ]
+    submissions = []
+    for index, (room, title) in enumerate(zip(rooms, titles, strict=True)):
+        submission = SubmissionFactory(
+            event=event,
+            submission_type=sub_type,
+            state=SubmissionStates.CONFIRMED,
+            attendee_signup_capacity=10,
+            title=title,
+        )
+        TalkSlotFactory(
+            submission=submission,
+            room=room,
+            is_visible=True,
+            start=now() + dt.timedelta(minutes=30 * index),
+            end=now() + dt.timedelta(minutes=60 + 30 * index),
+        )
+        submissions.append(submission)
+    return submissions
+
+
+def test_signup_post_rejected_for_overlapping_session(client, event):
+    event.feature_flags = {**event.feature_flags, "attendee_signup": True}
+    event.save()
+    with scopes_disabled():
+        submission_a, submission_b = _two_overlapping_signup_sessions(event)
+        freeze_schedule(event.wip_schedule, "v1", notify_speakers=False)
+    user = UserFactory()
+    client.force_login(user)
+
+    first = client.post(submission_a.urls.signup, follow=False)
+    assert first.status_code == 302
+    assert first.url.endswith("#signup-success")
+
+    # Simulates the same attendee signing up from another tab/device.
+    response = client.post(submission_b.urls.signup, follow=True)
+    content = response.content.decode()
+    assert response.status_code == 200
+    assert "First session" in content
+    assert "overlaps with this session" in content
+    with scope(event=event):
+        assert not AttendeeSignup.objects.filter(
+            submission=submission_b, attendee__user=user
+        ).exists()
+
+    # After cancelling A, signing up for B succeeds.
+    client.post(submission_a.urls.signup_cancel, follow=False)
+    retry = client.post(submission_b.urls.signup, follow=False)
+    assert retry.status_code == 302
+    assert retry.url.endswith("#signup-success")
+    with scope(event=event):
+        assert AttendeeSignup.objects.filter(
+            submission=submission_b,
+            attendee__user=user,
+            state=AttendeeSignupStates.CONFIRMED,
+        ).exists()
+
+
+def test_signup_post_back_to_back_sessions_both_succeed(client, event):
+    event.feature_flags = {**event.feature_flags, "attendee_signup": True}
+    event.save()
+    with scopes_disabled():
+        sub_type = SubmissionTypeFactory(event=event, attendee_signup_required=True)
+        room = RoomFactory(event=event, capacity=20)
+        base = now() + dt.timedelta(days=1)
+        submissions = []
+        for index in range(2):
+            submission = SubmissionFactory(
+                event=event,
+                submission_type=sub_type,
+                state=SubmissionStates.CONFIRMED,
+                attendee_signup_capacity=10,
+            )
+            TalkSlotFactory(
+                submission=submission,
+                room=room,
+                is_visible=True,
+                start=base + dt.timedelta(hours=index),
+                end=base + dt.timedelta(hours=index + 1),
+            )
+            submissions.append(submission)
+        freeze_schedule(event.wip_schedule, "v1", notify_speakers=False)
+    user = UserFactory()
+    client.force_login(user)
+
+    for submission in submissions:
+        response = client.post(submission.urls.signup, follow=False)
+        assert response.status_code == 302
+        assert response.url.endswith("#signup-success")
+
+    with scope(event=event):
+        assert (
+            AttendeeSignup.objects.filter(
+                submission__event=event,
+                attendee__user=user,
+                state=AttendeeSignupStates.CONFIRMED,
+            ).count()
+            == 2
+        )

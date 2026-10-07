@@ -1,5 +1,7 @@
 # SPDX-FileCopyrightText: 2026-present Tobias Kunze
 # SPDX-License-Identifier: AGPL-3.0-only WITH LicenseRef-Pretalx-AGPL-3.0-Terms
+import datetime as dt
+
 import pytest
 from django.contrib.auth.models import AnonymousUser
 from django_scopes import scope
@@ -15,7 +17,7 @@ from pretalx.submission.domain.signup import (
     get_signup_for_user,
 )
 from pretalx.submission.enums import AttendeeSignupStates
-from pretalx.submission.models import AttendeeSignup, SubmissionStates
+from pretalx.submission.models import AttendeeSignup, Submission, SubmissionStates
 from tests.factories import (
     AttendeeProfileFactory,
     AttendeeSignupFactory,
@@ -352,4 +354,157 @@ def test_cancel_signup_sets_state_and_logs():
             .filter(action_type="pretalx.submission.signup.cancel")
             .count()
             == 1
+        )
+
+
+def _released_sessions(
+    event, sub_type, *, window_a=(0, 60), window_b=(30, 90), timeless_b=False
+):
+    base = event.datetime_from
+    rooms = [RoomFactory(event=event, capacity=20), RoomFactory(event=event, capacity=20)]
+    submission_a = _make_submission(event, sub_type)
+    submission_b = _make_submission(event, sub_type)
+    TalkSlotFactory(
+        submission=submission_a,
+        room=rooms[0],
+        schedule=event.wip_schedule,
+        is_visible=True,
+        start=base + dt.timedelta(minutes=window_a[0]),
+        end=base + dt.timedelta(minutes=window_a[1]),
+    )
+    TalkSlotFactory(
+        submission=submission_b,
+        room=rooms[1],
+        schedule=event.wip_schedule,
+        is_visible=True,
+        start=None if timeless_b else base + dt.timedelta(minutes=window_b[0]),
+        end=None if timeless_b else base + dt.timedelta(minutes=window_b[1]),
+    )
+    # Slots only become publicly visible for confirmed submissions.
+    Submission.objects.filter(pk__in=[submission_a.pk, submission_b.pk]).update(
+        state=SubmissionStates.CONFIRMED
+    )
+    freeze_schedule(event.wip_schedule, "v1", notify_speakers=False)
+    return submission_a, submission_b
+
+
+def test_create_signup_rejects_overlapping_session_even_in_another_room():
+    event, sub_type = _signup_event()
+    submission_a, submission_b = _released_sessions(event, sub_type)
+    user = UserFactory()
+
+    with scope(event=event):
+        create_signup(submission_a, user=user)
+        with pytest.raises(SubmissionError) as exc_info:
+            create_signup(submission_b, user=user)
+
+    assert submission_a.title in str(exc_info.value)
+    with scope(event=event):
+        assert not AttendeeSignup.objects.filter(
+            submission=submission_b, attendee__user=user
+        ).exists()
+        assert submission_b.confirmed_signup_count == 0
+
+
+def test_create_signup_allows_back_to_back_sessions():
+    event, sub_type = _signup_event()
+    submission_a, submission_b = _released_sessions(
+        event, sub_type, window_a=(0, 60), window_b=(60, 120)
+    )
+    user = UserFactory()
+
+    with scope(event=event):
+        signup_a = create_signup(submission_a, user=user)
+        signup_b = create_signup(submission_b, user=user)
+
+    assert signup_a.pk != signup_b.pk
+    with scope(event=event):
+        assert submission_a.confirmed_signup_count == 1
+        assert submission_b.confirmed_signup_count == 1
+
+
+def test_create_signup_ignores_cancelled_overlapping_signup():
+    event, sub_type = _signup_event()
+    submission_a, submission_b = _released_sessions(event, sub_type)
+    user = UserFactory()
+
+    with scope(event=event):
+        create_signup(submission_a, user=user)
+        cancel_signup(submission_a, user=user)
+        signup_b = create_signup(submission_b, user=user)
+
+    assert signup_b.state == AttendeeSignupStates.CONFIRMED
+
+
+def test_create_signup_reactivating_into_overlap_is_rejected():
+    event, sub_type = _signup_event()
+    submission_a, submission_b = _released_sessions(event, sub_type)
+    user = UserFactory()
+
+    with scope(event=event):
+        signup_a = create_signup(submission_a, user=user)
+        cancel_signup(submission_a, user=user)
+        create_signup(submission_b, user=user)
+        with pytest.raises(SubmissionError):
+            create_signup(submission_a, user=user)
+
+    signup_a.refresh_from_db()
+    assert signup_a.state == AttendeeSignupStates.CANCELED
+
+
+def test_create_signup_timeless_session_does_not_conflict():
+    event, sub_type = _signup_event()
+    submission_a, submission_b = _released_sessions(event, sub_type, timeless_b=True)
+    user = UserFactory()
+
+    with scope(event=event):
+        create_signup(submission_a, user=user)
+        signup_b = create_signup(submission_b, user=user)
+
+    assert signup_b.state == AttendeeSignupStates.CONFIRMED
+
+
+def test_create_signup_conflict_check_runs_once_per_confirm_request():
+    event, sub_type = _signup_event()
+    submission_a, _submission_b = _released_sessions(event, sub_type)
+    user = UserFactory()
+
+    with scope(event=event):
+        first = create_signup(submission_a, user=user)
+        # Repeated requests for the same session stay idempotent and do
+        # not trigger any conflict logic against the signup itself.
+        second = create_signup(submission_a, user=user)
+
+    assert first.pk == second.pk
+    with scope(event=event):
+        assert (
+            submission_a.logged_actions()
+            .filter(action_type="pretalx.submission.signup.signup")
+            .count()
+            == 1
+        )
+
+
+def test_cancel_signup_then_overlapping_signup_and_reactivation_story():
+    """Cancel stays idempotent and frees the slot; re-confirmation re-checks."""
+    event, sub_type = _signup_event()
+    submission_a, submission_b = _released_sessions(event, sub_type)
+    user = UserFactory()
+
+    with scope(event=event):
+        create_signup(submission_a, user=user)
+        # Cancelling twice and cancelling the other session without a
+        # signup are all no-ops, never errors.
+        cancel_signup(submission_a, user=user)
+        assert cancel_signup(submission_a, user=user) is None
+        assert cancel_signup(submission_b, user=user) is None
+
+        create_signup(submission_b, user=user)
+        # Moving the attendee back onto A is blocked while B is held.
+        with pytest.raises(SubmissionError):
+            create_signup(submission_a, user=user)
+        cancel_signup(submission_b, user=user)
+        # ...and allowed again once B was cancelled.
+        assert create_signup(submission_a, user=user).state == (
+            AttendeeSignupStates.CONFIRMED
         )

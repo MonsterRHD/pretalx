@@ -26,7 +26,7 @@ SPDX-License-Identifier: AGPL-3.0-only WITH LicenseRef-Pretalx-AGPL-3.0-Terms
         <div class="mb-3">
             {{ form.version.as_field_group }}
         </div>
-        {% if warnings.unconfirmed or warnings.unscheduled or warnings.no_track or warnings.talk_warnings or warnings.signup_room_too_large or warnings.signup_no_capacity or warnings.signup_overfull or warnings.signup_dropped_with_attendees %}
+        {% if warnings.unconfirmed or warnings.unscheduled or warnings.no_track or warnings.talk_warnings or warnings.signup_room_too_large or warnings.signup_no_capacity or warnings.signup_overfull or warnings.signup_dropped_with_attendees or warnings.signup_conflicts %}
             {% #alert level="warning" %}
             {% blocktranslate trimmed %}
                 There are still warnings about the release of this schedule. Please review them carefully!
@@ -156,6 +156,50 @@ SPDX-License-Identifier: AGPL-3.0-only WITH LicenseRef-Pretalx-AGPL-3.0-Terms
                     {% endfor %}
                 </ul>
             </details>
+        {% endif %}
+
+        {% if warnings.signup_conflicts %}
+            {% #alert level="danger" %}
+            {% translate "Release blocked" as signup_conflicts_heading %}
+            <h4 class="alert-heading mb-2"><i class="fa fa-ban"></i> {{ signup_conflicts_heading }}</h4>
+            <p>
+                {% blocktranslate trimmed %}
+                    The following attendees have confirmed signups for sessions that overlap in this schedule
+                    version. The schedule <strong>cannot be released</strong> until these conflicts are resolved by
+                    moving the sessions apart or by cancelling the affected signups. The previously released
+                    schedule remains valid and public in the meantime.
+                {% endblocktranslate %}
+            </p>
+            <ul class="signup-conflicts mb-0">
+                {% for entry in warnings.signup_conflicts %}
+                    <li>
+                        <strong>{{ entry.attendee.user.get_display_name }}</strong>
+                        {% if entry.attendee.user.email %}({{ entry.attendee.user.email }}){% endif %}:
+                        <a href="{{ entry.submission_a.orga_urls.signup }}">{{ quotation_open }}{{ entry.submission_a.title }}{{ quotation_close }}</a>
+                        {% if entry.slot_a.room %}
+                            {% blocktranslate trimmed with start=entry.slot_a.local_start|date:"Y-m-d H:i" end=entry.slot_a.local_end|date:"H:i" room=entry.slot_a.room.name %}
+                                ({{ start }}–{{ end }}, {{ room }})
+                            {% endblocktranslate %}
+                        {% else %}
+                            {% blocktranslate trimmed with start=entry.slot_a.local_start|date:"Y-m-d H:i" end=entry.slot_a.local_end|date:"H:i" %}
+                                ({{ start }}–{{ end }})
+                            {% endblocktranslate %}
+                        {% endif %}
+                        ↔
+                        <a href="{{ entry.submission_b.orga_urls.signup }}">{{ quotation_open }}{{ entry.submission_b.title }}{{ quotation_close }}</a>
+                        {% if entry.slot_b.room %}
+                            {% blocktranslate trimmed with start=entry.slot_b.local_start|date:"Y-m-d H:i" end=entry.slot_b.local_end|date:"H:i" room=entry.slot_b.room.name %}
+                                ({{ start }}–{{ end }}, {{ room }})
+                            {% endblocktranslate %}
+                        {% else %}
+                            {% blocktranslate trimmed with start=entry.slot_b.local_start|date:"Y-m-d H:i" end=entry.slot_b.local_end|date:"H:i" %}
+                                ({{ start }}–{{ end }})
+                            {% endblocktranslate %}
+                        {% endif %}
+                    </li>
+                {% endfor %}
+            </ul>
+            {% /alert %}
         {% endif %}
 
         {% if warnings.signup_room_too_large or warnings.signup_no_capacity or warnings.signup_overfull or warnings.signup_dropped_with_attendees %}

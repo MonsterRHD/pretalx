@@ -8,6 +8,7 @@ from django.utils.translation import gettext_lazy as _
 
 from pretalx.common.text.phrases import phrases
 from pretalx.schedule.models import TalkSlot
+from pretalx.submission.domain.conflicts import find_signup_conflicts
 from pretalx.submission.domain.queries.submission import (
     annotate_confirmed_signup_count,
     annotate_slot_confirmed_signup_count,
@@ -331,6 +332,7 @@ def compute_warnings(schedule) -> dict:
         "signup_no_capacity": [],
         "signup_overfull": [],
         "signup_dropped_with_attendees": [],
+        "signup_conflicts": [],
     }
     if schedule.event.has_active_tracks:
         warnings["no_track"] = talks.filter(submission__track_id__isnull=True)
@@ -354,6 +356,7 @@ def compute_signup_warnings(schedule) -> dict:
         "signup_no_capacity": [],
         "signup_overfull": [],
         "signup_dropped_with_attendees": [],
+        "signup_conflicts": find_signup_conflicts(schedule),
     }
     no_capacity_slots = schedule.talks.filter(
         submission__isnull=False,

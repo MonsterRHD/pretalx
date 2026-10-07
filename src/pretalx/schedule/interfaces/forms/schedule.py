@@ -84,6 +84,22 @@ class ScheduleReleaseForm(PretalxI18nModelForm):
         )
         return version
 
+    def clean(self):
+        cleaned_data = super().clean()
+        # Hard blocker (not just a warning): a release that leaves an
+        # attendee with two overlapping confirmed signups is rejected.
+        # freeze_schedule performs the same check again under a lock, so
+        # a signup landing concurrently can never slip through either.
+        if self.warnings.get("signup_conflicts"):
+            raise forms.ValidationError(
+                _(
+                    "This schedule cannot be released: some attendees have "
+                    "overlapping confirmed signups. Cancel or adjust the "
+                    "signups listed below before releasing."
+                )
+            )
+        return cleaned_data
+
     class Meta:
         model = Schedule
         fields = ("version", "comment")

@@ -7,6 +7,7 @@ from django.core.exceptions import ValidationError
 from django.db.utils import IntegrityError
 from django_scopes import scope
 
+from pretalx.common.exceptions import ScheduleConflictError
 from pretalx.mail.models import QueuedMail
 from pretalx.schedule.domain.release import (
     apply_signup_capacity_changes,
@@ -17,14 +18,20 @@ from pretalx.schedule.domain.release import (
 )
 from pretalx.schedule.models.slot import SlotType
 from pretalx.schedule.signals import schedule_release
+from pretalx.submission.domain.signup import cancel_signup, create_signup
+from pretalx.submission.enums import AttendeeSignupStates
 from pretalx.submission.models import SubmissionStates
 from tests.factories import (
+    AttendeeProfileFactory,
+    AttendeeSignupFactory,
     EventFactory,
     RoomFactory,
     ScheduleFactory,
     SpeakerFactory,
     SubmissionFactory,
+    SubmissionTypeFactory,
     TalkSlotFactory,
+    UserFactory,
 )
 
 pytestmark = [pytest.mark.unit, pytest.mark.django_db]
@@ -436,3 +443,223 @@ def test_apply_signup_capacity_defaults_includes_invisible_scheduled_slots(
 
     submission.refresh_from_db()
     assert submission.attendee_signup_capacity == 120
+
+
+def _two_signup_sessions(event, *, start_b_offset=60, end_b_offset=120):
+    sub_type = SubmissionTypeFactory(event=event, attendee_signup_required=True)
+    base = event.datetime_from
+    room_a = RoomFactory(event=event, capacity=20)
+    room_b = RoomFactory(event=event, capacity=20)
+    submission_a = SubmissionFactory(
+        event=event,
+        submission_type=sub_type,
+        state=SubmissionStates.CONFIRMED,
+        attendee_signup_capacity=10,
+    )
+    submission_b = SubmissionFactory(
+        event=event,
+        submission_type=sub_type,
+        state=SubmissionStates.CONFIRMED,
+        attendee_signup_capacity=10,
+    )
+    TalkSlotFactory(
+        submission=submission_a,
+        room=room_a,
+        schedule=event.wip_schedule,
+        is_visible=True,
+        start=base,
+        end=base + dt.timedelta(hours=1),
+    )
+    TalkSlotFactory(
+        submission=submission_b,
+        room=room_b,
+        schedule=event.wip_schedule,
+        is_visible=True,
+        start=base + dt.timedelta(minutes=start_b_offset),
+        end=base + dt.timedelta(minutes=end_b_offset),
+    )
+    return submission_a, submission_b
+
+
+def test_freeze_schedule_blocks_when_wip_move_creates_signup_overlap():
+    event = EventFactory(feature_flags={"attendee_signup": True})
+    with scope(event=event):
+        submission_a, submission_b = _two_signup_sessions(event)
+        freeze_schedule(event.wip_schedule, "v1", notify_speakers=False)
+        schedules_before = event.schedules.count()
+        user = UserFactory()
+        create_signup(submission_a, user=user)
+        create_signup(submission_b, user=user)
+
+        # Organiser moves B so that it overlaps A in the new WIP.
+        wip = event.wip_schedule
+        moved_slot = wip.talks.get(submission=submission_b)
+        moved_slot.start = event.datetime_from + dt.timedelta(minutes=30)
+        moved_slot.end = event.datetime_from + dt.timedelta(minutes=90)
+        moved_slot.save(update_fields=["start", "end"])
+
+        with pytest.raises(ScheduleConflictError) as exc_info:
+            freeze_schedule(wip, "v2", notify_speakers=False)
+
+    conflicts = exc_info.value.conflicts
+    assert len(conflicts) == 1
+    assert {conflicts[0]["submission_a"], conflicts[0]["submission_b"]} == {
+        submission_a,
+        submission_b,
+    }
+    with scope(event=event):
+        # Nothing was published: no new version, no extra WIP schedule,
+        # and the previous public schedule is still the current one.
+        assert event.schedules.count() == schedules_before
+        assert not event.schedules.filter(version="v2").exists()
+        assert event.current_schedule.version == "v1"
+        # The WIP adjustment is preserved (nothing was written by the
+        # failed freeze), so the organiser can keep editing.
+        moved_slot.refresh_from_db()
+        assert moved_slot.start == event.datetime_from + dt.timedelta(minutes=30)
+
+
+def test_freeze_schedule_blocked_release_can_be_retried_after_cancelling():
+    event = EventFactory(feature_flags={"attendee_signup": True})
+    with scope(event=event):
+        submission_a, submission_b = _two_signup_sessions(event)
+        freeze_schedule(event.wip_schedule, "v1", notify_speakers=False)
+        user = UserFactory()
+        create_signup(submission_a, user=user)
+        create_signup(submission_b, user=user)
+        wip = event.wip_schedule
+        moved_slot = wip.talks.get(submission=submission_b)
+        moved_slot.start = event.datetime_from + dt.timedelta(minutes=30)
+        moved_slot.end = event.datetime_from + dt.timedelta(minutes=90)
+        moved_slot.save(update_fields=["start", "end"])
+
+        with pytest.raises(ScheduleConflictError):
+            freeze_schedule(wip, "v2", notify_speakers=False)
+
+        # Resolve the conflict, then the same release attempt succeeds.
+        cancel_signup(submission_b, user=user)
+        released, new_wip = freeze_schedule(
+            event.wip_schedule, "v2", notify_speakers=False
+        )
+
+    assert released.version == "v2"
+    with scope(event=event):
+        assert event.current_schedule.version == "v2"
+        assert new_wip.pk != wip.pk
+
+
+def test_freeze_schedule_allows_wip_move_without_signup_overlap():
+    event = EventFactory(feature_flags={"attendee_signup": True})
+    with scope(event=event):
+        submission_a, submission_b = _two_signup_sessions(event)
+        freeze_schedule(event.wip_schedule, "v1", notify_speakers=False)
+        user = UserFactory()
+        create_signup(submission_a, user=user)
+        create_signup(submission_b, user=user)
+        wip = event.wip_schedule
+        moved_slot = wip.talks.get(submission=submission_b)
+        moved_slot.start = event.datetime_from + dt.timedelta(hours=2)
+        moved_slot.end = event.datetime_from + dt.timedelta(hours=3)
+        moved_slot.save(update_fields=["start", "end"])
+
+        released, _wip = freeze_schedule(wip, "v2", notify_speakers=False)
+
+    assert released.version == "v2"
+
+
+def test_freeze_schedule_retry_succeeds_after_sessions_moved_apart():
+    event = EventFactory(feature_flags={"attendee_signup": True})
+    with scope(event=event):
+        submission_a, submission_b = _two_signup_sessions(event)
+        freeze_schedule(event.wip_schedule, "v1", notify_speakers=False)
+        user = UserFactory()
+        create_signup(submission_a, user=user)
+        create_signup(submission_b, user=user)
+        wip = event.wip_schedule
+        moved_slot = wip.talks.get(submission=submission_b)
+        moved_slot.start = event.datetime_from + dt.timedelta(minutes=30)
+        moved_slot.end = event.datetime_from + dt.timedelta(minutes=90)
+        moved_slot.save(update_fields=["start", "end"])
+
+        with pytest.raises(ScheduleConflictError):
+            freeze_schedule(wip, "v2", notify_speakers=False)
+
+        # Adjust the WIP schedule so the sessions no longer overlap; no
+        # signup changes are necessary and the release now goes through.
+        moved_slot.start = event.datetime_from + dt.timedelta(hours=3)
+        moved_slot.end = event.datetime_from + dt.timedelta(hours=4)
+        moved_slot.save(update_fields=["start", "end"])
+
+        released, _new_wip = freeze_schedule(
+            event.wip_schedule, "v2", notify_speakers=False
+        )
+
+    assert released.version == "v2"
+    with scope(event=event):
+        assert event.current_schedule.version == "v2"
+        # Both signups survived the release unchanged.
+        assert submission_a.attendee_signups.filter(
+            state=AttendeeSignupStates.CONFIRMED
+        ).count() == 1
+        assert submission_b.attendee_signups.filter(
+            state=AttendeeSignupStates.CONFIRMED
+        ).count() == 1
+
+
+def test_freeze_schedule_blocks_first_release_with_conflicting_signups():
+    event = EventFactory(feature_flags={"attendee_signup": True})
+    with scope(event=event):
+        submission_a, submission_b = _two_signup_sessions(
+            event, start_b_offset=30, end_b_offset=90
+        )
+        user = UserFactory()
+        profile = AttendeeProfileFactory(event=event, user=user)
+        AttendeeSignupFactory(submission=submission_a, attendee=profile)
+        AttendeeSignupFactory(submission=submission_b, attendee=profile)
+        assert event.current_schedule is None
+
+        with pytest.raises(ScheduleConflictError):
+            freeze_schedule(event.wip_schedule, "v1", notify_speakers=False)
+
+        assert event.current_schedule is None
+        assert event.schedules.filter(version__isnull=False).count() == 0
+
+
+def test_freeze_schedule_ignores_signup_conflicts_when_feature_disabled():
+    event = EventFactory(feature_flags={"attendee_signup": False})
+    with scope(event=event):
+        submission_a, submission_b = _two_signup_sessions(
+            event, start_b_offset=30, end_b_offset=90
+        )
+        user = UserFactory()
+        profile = AttendeeProfileFactory(event=event, user=user)
+        AttendeeSignupFactory(submission=submission_a, attendee=profile)
+        AttendeeSignupFactory(submission=submission_b, attendee=profile)
+
+        released, _wip = freeze_schedule(
+            event.wip_schedule, "v1", notify_speakers=False
+        )
+
+    assert released.version == "v1"
+
+
+def test_freeze_schedule_conflict_only_counts_confirmed_signups():
+    event = EventFactory(feature_flags={"attendee_signup": True})
+    with scope(event=event):
+        submission_a, submission_b = _two_signup_sessions(
+            event, start_b_offset=30, end_b_offset=90
+        )
+        user = UserFactory()
+        profile = AttendeeProfileFactory(event=event, user=user)
+        AttendeeSignupFactory(submission=submission_a, attendee=profile)
+        AttendeeSignupFactory(
+            submission=submission_b,
+            attendee=profile,
+            state=AttendeeSignupStates.CANCELED,
+        )
+
+        released, _wip = freeze_schedule(
+            event.wip_schedule, "v1", notify_speakers=False
+        )
+
+    assert released.version == "v1"

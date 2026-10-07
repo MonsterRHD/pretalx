@@ -9,7 +9,9 @@ from django.db.models import Min, Q
 from django.db.utils import DatabaseError
 from django.utils.timezone import now
 
+from pretalx.common.exceptions import ScheduleConflictError
 from pretalx.common.models.log import ActivityLog
+from pretalx.event.models import Event
 from pretalx.schedule.domain.changes import update_unreleased_schedule_changes
 from pretalx.schedule.domain.notifications import generate_notifications
 from pretalx.schedule.domain.slot import copy_slot
@@ -17,6 +19,7 @@ from pretalx.schedule.enums import SlotType
 from pretalx.schedule.models import Schedule, TalkSlot
 from pretalx.schedule.signals import schedule_release
 from pretalx.schedule.validators.schedule import validate_version_characters
+from pretalx.submission.domain.conflicts import find_signup_conflicts
 from pretalx.submission.domain.queries.submission import annotate_requires_signup
 from pretalx.submission.enums import SubmissionStates
 from pretalx.submission.models import Submission
@@ -53,6 +56,20 @@ def freeze_schedule(schedule, name, user=None, notify_speakers=True, comment=Non
     validate_version_characters(name)
 
     with transaction.atomic():
+        # Lock the event first so that concurrent signup creation or
+        # cancellation cannot interleave with the release: both sides
+        # take this same lock, and the validation below therefore always
+        # sees a complete, committed set of signups.
+        locked_event = Event.objects.select_for_update().get(pk=schedule.event_id)
+        if locked_event.get_feature_flag("attendee_signup"):
+            conflicts = find_signup_conflicts(schedule)
+            if conflicts:
+                # Nothing has been written yet; rolling back leaves the
+                # previous public schedule (if any) in effect and the WIP
+                # schedule untouched, so publishing can simply be retried
+                # after signups were cancelled or sessions moved apart.
+                raise ScheduleConflictError(conflicts)
+
         schedule.version = name
         schedule.comment = comment
         schedule.published = now()

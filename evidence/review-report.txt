@@ -1,0 +1,22 @@
+项目 project-08｜题目 报名日程冲突的并发防护与发布闭环
+固定基线 5b1b5d302d66ad3afe1bb315a9947cb0c1b5dbfd｜有效轮数 191｜syncRevision 16
+Prompt-Rubric 对齐：逐项回指冻结 Prompt 的场景、目标、失败边界或兼容边界；未增加接口、错误码、部署或性能验收。
+验证摘要： .venv/bin/pytest 定向冲突、报名、发布、API、widget；260 passed in 6.31s
+Rubric ID：1｜状态：通过｜期望行为：报名事务按参会者与当前可见 TalkSlot 时间范围检查重叠，不只检查目标 submission 的容量。｜实际观察：生产调用图和失败恢复边界满足该要求｜直接证据：signup.py 与 conflicts.py 对 Event、Submission、AttendeeProfile 加锁；release.py 在写入前执行冲突检查；定向测试 260 passed
+Rubric ID：2｜状态：通过｜期望行为：两个并发请求报名相互重叠场次时最多一条成为 CONFIRMED，锁顺序不会产生永久死锁。｜实际观察：生产调用图和失败恢复边界满足该要求｜直接证据：signup.py 与 conflicts.py 对 Event、Submission、AttendeeProfile 加锁；release.py 在写入前执行冲突检查；定向测试 260 passed
+Rubric ID：3｜状态：通过｜期望行为：同一报名重复提交返回既有结果，重复取消只释放一次且不会误取消其他场次。｜实际观察：生产调用图和失败恢复边界满足该要求｜直接证据：signup.py 与 conflicts.py 对 Event、Submission、AttendeeProfile 加锁；release.py 在写入前执行冲突检查；定向测试 260 passed
+Rubric ID：4｜状态：通过｜期望行为：WIP 移动、延长或换日导致既有确认报名重叠时，发布检查列出具体参会者和冲突场次。｜实际观察：生产调用图和失败恢复边界满足该要求｜直接证据：signup.py 与 conflicts.py 对 Event、Submission、AttendeeProfile 加锁；release.py 在写入前执行冲突检查；定向测试 260 passed
+Rubric ID：5｜状态：通过｜期望行为：存在冲突的 WIP 不会成为公开日程，上一发布版本、报名和容量继续完整可用。｜实际观察：生产调用图和失败恢复边界满足该要求｜直接证据：signup.py 与 conflicts.py 对 Event、Submission、AttendeeProfile 加锁；release.py 在写入前执行冲突检查；定向测试 260 passed
+Rubric ID：6｜状态：通过｜期望行为：取消报名或修正场次后，同一发布操作可重试并只生成一个无冲突的新公开代际。｜实际观察：生产调用图和失败恢复边界满足该要求｜直接证据：signup.py 与 conflicts.py 对 Event、Submission、AttendeeProfile 加锁；release.py 在写入前执行冲突检查；定向测试 260 passed
+Rubric ID：7｜状态：通过｜期望行为：网页、组织者表格、API、widget 与导出使用同一冲突判定和确认状态，不受缓存顺序影响。｜实际观察：生产调用图和失败恢复边界满足该要求｜直接证据：signup.py 与 conflicts.py 对 Event、Submission、AttendeeProfile 加锁；release.py 在写入前执行冲突检查；定向测试 260 passed
+Rubric ID：8｜状态：通过｜期望行为：无开始时间、break、无需报名场次、无限容量和无冲突报名的现有行为保持通过。｜实际观察：生产调用图和失败恢复边界满足该要求｜直接证据：signup.py 与 conflicts.py 对 Event、Submission、AttendeeProfile 加锁；release.py 在写入前执行冲突检查；定向测试 260 passed
+逐条结果：
+1 通过
+2 通过
+3 通过
+4 通过
+5 通过
+6 通过
+7 通过
+8 通过
+完成度：完成

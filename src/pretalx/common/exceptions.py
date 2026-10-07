@@ -19,6 +19,23 @@ class SubmissionError(Exception):
     pass
 
 
+class ScheduleConflictError(Exception):
+    """Raised when a schedule release would violate scheduling invariants.
+
+    Carries the structured conflict list produced by
+    :func:`pretalx.submission.domain.conflicts.find_signup_conflicts`, so
+    callers can show the affected attendees and sessions. Raising inside
+    the release transaction rolls the release back completely, leaving
+    the previous public schedule in effect.
+    """
+
+    def __init__(self, conflicts=None):
+        self.conflicts = conflicts or []
+        super().__init__(
+            "Schedule release blocked: confirmed attendee signups overlap."
+        )
+
+
 class UserDeletionError(Exception):
     pass
 
