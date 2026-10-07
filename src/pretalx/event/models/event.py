@@ -211,6 +211,10 @@ class Event(PretalxModel):
         on_delete=models.PROTECT,
     )
     is_public = models.BooleanField(default=False, verbose_name=_("Event is public"))
+    # Monotonic counter allocating schedule release "generations". It is only
+    # ever advanced inside a row lock taken by the release pipeline, so each
+    # release attempt gets a unique, ordered generation.
+    schedule_generation = models.PositiveBigIntegerField(default=0)
     date_from = DateField(verbose_name=_("Event start date"))
     date_to = DateField(verbose_name=_("Event end date"))
     timezone = models.CharField(
@@ -616,9 +620,13 @@ class Event(PretalxModel):
         if pk := getattr(self, "_current_schedule_pk", None):
             # Annotated by the event middleware, saving the order-by query below
             return self.schedules.get(pk=pk)
+        from pretalx.schedule.domain.queries.schedule import (  # noqa: PLC0415 -- thin method
+            current_schedule_ordering,
+        )
+
         return (
-            self.schedules.order_by("-published")
-            .filter(published__isnull=False)
+            self.schedules.filter(published__isnull=False)
+            .order_by(*current_schedule_ordering())
             .first()
         )
 

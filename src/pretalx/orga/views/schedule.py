@@ -54,7 +54,7 @@ from pretalx.schedule.domain.notifications import (
     count_pending_notifications,
     generate_notifications,
 )
-from pretalx.schedule.domain.release import freeze_schedule
+from pretalx.schedule.domain.release import ConcurrentReleaseError, freeze_schedule
 from pretalx.schedule.domain.room import (
     ROOM_IN_USE_ERROR,
     annotate_room_usage,
@@ -282,13 +282,26 @@ class ScheduleReleaseView(EventPermissionRequired, FormView):
     @transaction.atomic
     def form_valid(self, form):
         form.apply_expand_capacity(user=self.request.user)
-        freeze_schedule(
-            self.request.event.wip_schedule,
-            name=form.cleaned_data["version"],
-            user=self.request.user,
-            notify_speakers=form.cleaned_data["notify_speakers"],
-            comment=form.cleaned_data["comment"],
-        )
+        try:
+            freeze_schedule(
+                self.request.event.wip_schedule,
+                name=form.cleaned_data["version"],
+                user=self.request.user,
+                notify_speakers=form.cleaned_data["notify_speakers"],
+                comment=form.cleaned_data["comment"],
+            )
+        except ConcurrentReleaseError:
+            # A concurrent release (e.g. a second tab/API client) advanced
+            # the same WIP first; the generations converged, no partial state
+            # remains. Ask the organiser to review the result and retry.
+            messages.error(
+                self.request,
+                _(
+                    "The schedule was just released by a concurrent action. "
+                    "Please review the current schedule and try again if needed."
+                ),
+            )
+            return redirect(self.request.event.orga_urls.schedule)
         messages.success(self.request, _("Nice, your schedule has been released!"))
         return redirect(self.request.event.orga_urls.schedule)
 

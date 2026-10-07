@@ -23,7 +23,7 @@ from pretalx.schedule.validators.schedule import (
     validate_unique_version,
     validate_version_characters,
 )
-from pretalx.submission.rules import is_wip, orga_can_change_submissions
+from pretalx.submission.rules import is_released, is_wip, orga_can_change_submissions
 
 
 class Schedule(PretalxModel):
@@ -44,6 +44,15 @@ class Schedule(PretalxModel):
         validators=[validate_version_characters],
         verbose_name=pgettext_lazy("Version of the conference schedule", "Version"),
     )
+    generation = models.PositiveBigIntegerField(
+        null=True,
+        blank=True,
+        verbose_name=_("Generation"),
+        help_text=_(
+            "Monotonic per-event generation of this schedule. NULL for WIP schedules; "
+            "the confirmed schedule with the highest generation is the current public schedule."
+        ),
+    )
     published = models.DateTimeField(null=True, blank=True)
     comment = I18nTextField(
         null=True,
@@ -59,10 +68,18 @@ class Schedule(PretalxModel):
         verbose_name_plural = _("Schedules")
         ordering = ("-published",)
         unique_together = (("event", "version"),)
+        constraints = [
+            models.UniqueConstraint(
+                fields=["event", "generation"],
+                name="schedule_unique_generation_per_event",
+            )
+        ]
         rules_permissions = {
             "list": can_view_schedule,
+            # NOTE: this is evaluated against the event in the widget view;
+            # unconfirmed candidates are excluded there by query filtering.
             "view_widget": is_widget_visible | orga_can_change_submissions,
-            "view": (~is_wip & is_agenda_visible)
+            "view": (~is_wip & is_released & is_agenda_visible)
             | orga_can_change_submissions
             | (is_reviewer & can_view_speaker_names),
             "orga_view": orga_can_change_submissions
@@ -173,6 +190,17 @@ class Schedule(PretalxModel):
             return False
 
         return self != self.event.current_schedule
+
+    @cached_property
+    def is_candidate(self):
+        """A built but unconfirmed release generation: it has a version
+        name but no ``published`` timestamp yet and is invisible on all
+        public surfaces."""
+        return bool(self.version) and self.published is None
+
+    @cached_property
+    def is_released(self):
+        return self.published is not None
 
     def __str__(self) -> str:
         return f"Schedule(event={self.event.slug}, version={self.version})"

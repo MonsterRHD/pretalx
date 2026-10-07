@@ -36,6 +36,17 @@ class EventPluginSignal(django.dispatch.Signal):
         receivers = self._live_receivers(sender)
         return receivers[0]
 
+    def get_active_receivers(self, sender):
+        """All live receivers that belong to a plugin enabled for ``sender``
+        (or to a core module)."""
+        if not app_cache:
+            _populate_app_cache()
+        return [
+            receiver
+            for receiver in self.get_live_receivers(sender)
+            if self._is_active(sender, receiver)
+        ]
+
     @staticmethod
     def _is_active(sender, receiver):
         # Find the Django application this belongs to

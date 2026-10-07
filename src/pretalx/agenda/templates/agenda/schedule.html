@@ -47,7 +47,7 @@ SPDX-License-Identifier: AGPL-3.0-only WITH LicenseRef-Pretalx-AGPL-3.0-Terms
         {% if schedule != schedule.event.current_schedule %}
             <div class="m-3">
                 {% #alert level="warning" %}
-                {% if not schedule.version %}
+                {% if not schedule.published %}
                     {{ phrases.schedule.wip_version }}
                 {% else %}
                     {{ phrases.schedule.old_version }}

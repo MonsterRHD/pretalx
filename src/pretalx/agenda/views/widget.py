@@ -104,13 +104,17 @@ def widget_data(request, event, version=None):
             raise Http404
         schedule = request.event.wip_schedule
     elif version:
-        schedule = event.schedules.filter(version__iexact=version).first()
+        # Only confirmed schedules may be served publicly by version name;
+        # unconfirmed release candidates fall through to the current schedule.
+        schedule = event.schedules.filter(
+            version__iexact=version, published__isnull=False
+        ).first()
 
     schedule = schedule or event.current_schedule
     if not schedule:
         raise Http404
 
-    result = build_widget_data(schedule, all_talks=not schedule.version)
+    result = build_widget_data(schedule, all_talks=not schedule.published)
     response = JsonResponse(result, encoder=I18nJSONEncoder)
     response["Access-Control-Allow-Headers"] = "authorization,content-type"
     response["Access-Control-Allow-Origin"] = "*"

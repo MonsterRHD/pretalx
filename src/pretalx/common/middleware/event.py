@@ -8,7 +8,7 @@ from urllib.parse import urljoin, urlparse
 from django.apps import apps
 from django.conf import settings
 from django.core.exceptions import DisallowedHost
-from django.db.models import Exists, OuterRef, Subquery
+from django.db.models import Exists, F, OuterRef, Subquery
 from django.http import Http404
 from django.http.request import split_domain_port
 from django.shortcuts import get_object_or_404, redirect
@@ -157,7 +157,7 @@ class EventMiddleware:
             )
             latest_schedule_subquery = (
                 Schedule.objects.filter(event=OuterRef("pk"), published__isnull=False)
-                .order_by("-published")
+                .order_by(F("generation").desc(nulls_last=True), "-published", "-pk")
                 .values("pk")[:1]
             )
             annotations = {"_current_schedule_pk": Subquery(latest_schedule_subquery)}

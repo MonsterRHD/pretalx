@@ -1,0 +1,22 @@
+项目 project-07｜题目 日程发布失败后的单一公开代际
+固定基线 5b1b5d302d66ad3afe1bb315a9947cb0c1b5dbfd｜有效轮数 186｜syncRevision 16
+Prompt-Rubric 对齐：逐项回指冻结 Prompt 的场景、目标、失败边界或兼容边界；未增加接口、错误码、部署或性能验收。
+验证摘要： .venv/bin/pytest -q src/tests/schedule/domain/test_release_pipeline.py src/tests/agenda/views/integration/test_release_generation.py；17 passed in 1.20s
+Rubric ID：1｜状态：通过｜期望行为：一次发布为数据库 release、可见 TalkSlot 和新 WIP 分配同一可持久识别的代际。｜实际观察：生产调用图和失败恢复边界满足该要求｜直接证据： .venv/bin/pytest -q src/tests/schedule/domain/test_release_pipeline.py src/tests/agenda/views/integration/test_release_generation.py；17 passed in 1.20s
+Rubric ID：2｜状态：通过｜期望行为：公开网页、API、feed、导出和相关缓存只读取确认代际并在切换时保持版本一致。｜实际观察：生产调用图和失败恢复边界满足该要求｜直接证据： .venv/bin/pytest -q src/tests/schedule/domain/test_release_pipeline.py src/tests/agenda/views/integration/test_release_generation.py；17 passed in 1.20s
+Rubric ID：3｜状态：通过｜期望行为：讲者通知固定引用确认日程快照，重试不会因后续 WIP 变化发送不同内容。｜实际观察：生产调用图和失败恢复边界满足该要求｜直接证据： .venv/bin/pytest -q src/tests/schedule/domain/test_release_pipeline.py src/tests/agenda/views/integration/test_release_generation.py；17 passed in 1.20s
+Rubric ID：4｜状态：通过｜期望行为：schedule_release 插件回调按发布代际至多成功一次，失败可重试且不伪装发布完成。｜实际观察：生产调用图和失败恢复边界满足该要求｜直接证据： .venv/bin/pytest -q src/tests/schedule/domain/test_release_pipeline.py src/tests/agenda/views/integration/test_release_generation.py；17 passed in 1.20s
+Rubric ID：5｜状态：未通过｜期望行为：冻结、缓存、邮件或插件阶段失败时上一公开版本继续完整可用，不暴露半发布状态。｜实际观察：候选在通知插件缓存阶段完成前已设置 published｜直接证据：候选在通知插件缓存阶段完成前已设置 published｜原因：候选在通知插件缓存阶段完成前已设置 published｜影响：该 Rubric 的失败路径或原子可见性保证未成立｜证据位置：固定版本工作区代码与验证摘要
+Rubric ID：6｜状态：未通过｜期望行为：worker 或进程在任一阶段退出后，重启能继续最新候选或撤销它，并清理孤立 WIP 与缓存。｜实际观察：插件失败后候选保持已确认状态并继续重试，未撤销公开候选｜直接证据：插件失败后候选保持已确认状态并继续重试，未撤销公开候选｜原因：插件失败后候选保持已确认状态并继续重试，未撤销公开候选｜影响：该 Rubric 的失败路径或原子可见性保证未成立｜证据位置：固定版本工作区代码与验证摘要
+Rubric ID：7｜状态：通过｜期望行为：并发发布、撤回后重发和版本名冲突收敛到唯一当前代际，旧任务不能覆盖新成功版本。｜实际观察：生产调用图和失败恢复边界满足该要求｜直接证据： .venv/bin/pytest -q src/tests/schedule/domain/test_release_pipeline.py src/tests/agenda/views/integration/test_release_generation.py；17 passed in 1.20s
+Rubric ID：8｜状态：通过｜期望行为：notify_speakers=false、普通 WIP 保存和既有网页/API/feed/export 格式保持通过。｜实际观察：生产调用图和失败恢复边界满足该要求｜直接证据： .venv/bin/pytest -q src/tests/schedule/domain/test_release_pipeline.py src/tests/agenda/views/integration/test_release_generation.py；17 passed in 1.20s
+逐条结果：
+1 通过
+2 通过
+3 通过
+4 通过
+5 未通过 候选在通知插件缓存阶段完成前已设置 published
+6 未通过 插件失败后候选保持已确认状态并继续重试，未撤销公开候选
+7 通过
+8 通过
+完成度：部分完成

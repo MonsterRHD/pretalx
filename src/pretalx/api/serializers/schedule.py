@@ -40,8 +40,9 @@ class ScheduleSerializer(ScheduleListSerializer):
     @extend_schema_field(list[int])
     def get_slots(self, obj):
         only_visible_slots = self.context.get("only_visible_slots", True)
-        if only_visible_slots and not obj.version:
-            # This should never happen, but better safe than sorry.
+        if only_visible_slots and not obj.published:
+            # Slots of WIP schedules and unconfirmed release candidates are
+            # never exposed on the public, slot-only API view.
             return []
         qs = obj.talks.with_display_data()
         if only_visible_slots:

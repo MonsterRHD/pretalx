@@ -28,7 +28,12 @@ from pretalx.schedule.validators.slot import (
     validate_slot_time_range,
     validate_slot_within_event,
 )
-from pretalx.submission.rules import is_break, is_wip, orga_can_change_submissions
+from pretalx.submission.rules import (
+    is_break,
+    is_released,
+    is_wip,
+    orga_can_change_submissions,
+)
 
 INSTANCE_IDENTIFIER = None
 ROOM_HIDDEN_ERROR = _(
@@ -121,11 +126,13 @@ class TalkSlot(PretalxModel):
         rules_permissions = {
             "list": is_agenda_visible | orga_can_change_submissions,
             "view": (
-                # public view is only possible for non-wip slots
-                ~is_wip
+                # public view is only possible for confirmed schedules
+                # (unconfirmed release candidates stay invisible)
                 # visibility then is down to the submission being visible in the
                 # agenda or the slot being a break. further filtering for is_visible
                 # is down to the API/view
+                ~is_wip
+                & is_released
                 & ((is_break & is_agenda_visible) | is_agenda_submission_visible)
             )
             | orga_can_change_submissions,

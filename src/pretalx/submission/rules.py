@@ -197,6 +197,17 @@ def is_wip(user, obj):
 
 
 @rules.predicate
+def is_released(user, obj):
+    """True only once a schedule generation has been publicly confirmed.
+
+    A built-but-unconfirmed release candidate carries a version but no
+    ``published`` timestamp and must not be visible to attendees.
+    """
+    schedule = getattr(obj, "schedule", None) or obj
+    return bool(getattr(schedule, "published", None))
+
+
+@rules.predicate
 def is_feedback_ready(user, obj):
     return obj.does_accept_feedback
 

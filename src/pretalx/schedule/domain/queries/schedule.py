@@ -3,25 +3,52 @@
 
 import datetime as dt
 
+from django.db.models import F
+
 from pretalx.schedule.models import TalkSlot
 
 DAY_START_HOUR = 4
 
 
+def current_schedule_ordering():
+    """Ordering that selects the one current public schedule.
+
+    Confirmed releases are ordered by their monotonic generation, so the
+    current schedule is always the confirmed generation with the highest
+    number. This fences stale release workers: even if an older generation
+    is confirmed (or timestamps collide), it can never become the current
+    schedule once a newer generation has been confirmed. The published
+    timestamp and primary key only tie-break legacy rows without a
+    generation.
+    """
+    return (F("generation").desc(nulls_last=True), "-published", "-pk")
+
+
+def confirmed_schedules(event):
+    """Schedules of ``event`` that were publicly confirmed.
+
+    Unconfirmed release candidates (version set, ``published`` still NULL)
+    are excluded everywhere attendees can reach: web pages, API, feed and
+    exports.
+    """
+    return event.schedules.filter(published__isnull=False)
+
+
 def published_schedules(event):
-    """Released schedules of ``event``, most recent first, with the event
-    preloaded.
+    """Confirmed schedules of ``event``, newest generation first, with the
+    event preloaded.
 
     Callers that render the changelog, the Atom feed, or the static HTML
-    export all want the same shape: a flat list of all versioned schedules in
-    publication order. Use :func:`pretalx.schedule.domain.changelog.build_changelog`
-    when ``previous_schedule`` and ``scheduled_talks`` should also be batched
-    in.
+    export all want the same shape: a flat list of all confirmed schedules
+    in publication order. Use
+    :func:`pretalx.schedule.domain.changelog.build_changelog`
+    when ``previous_schedule`` and ``scheduled_talks`` should also be
+    batched in.
     """
     return (
-        event.schedules.filter(version__isnull=False)
+        confirmed_schedules(event)
         .select_related("event")
-        .order_by("-published")
+        .order_by(*current_schedule_ordering())
     )
 
 
@@ -42,9 +69,14 @@ def get_schedule(event, version, *, queryset=None):
 
 
 def public_talk_slots(event):
-    """Talk slots visible to non-orga viewers of ``event``."""
-    return TalkSlot.objects.filter(schedule__event=event, is_visible=True).exclude(
-        schedule__version__isnull=True
+    """Talk slots visible to non-orga viewers of ``event``.
+
+    Only slots of confirmed schedules qualify; slots of an unconfirmed
+    release candidate stay hidden even though their schedule already
+    carries a version name.
+    """
+    return TalkSlot.objects.filter(
+        schedule__event=event, is_visible=True, schedule__published__isnull=False
     )
 
 

@@ -3,7 +3,24 @@
 
 from django.dispatch import receiver
 
-from pretalx.common.signals import register_data_exporters
+from pretalx.common.signals import (
+    minimum_interval,
+    periodic_task,
+    register_data_exporters,
+)
+
+
+@receiver(periodic_task)
+@minimum_interval(minutes_after_success=1)
+def recover_interrupted_schedule_releases(sender, **kwargs):
+    """Resume or abort schedule release generations interrupted by a
+    failing worker or process exit, so published marker, visible slots,
+    cache and notifications can never drift apart."""
+    from pretalx.schedule.tasks import (  # noqa: PLC0415 -- receiver
+        task_recover_schedule_releases,
+    )
+
+    task_recover_schedule_releases.apply_async(ignore_result=True)
 
 
 @receiver(register_data_exporters, dispatch_uid="exporter_builtin_ical")

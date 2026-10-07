@@ -55,7 +55,12 @@ class ScheduleMixin:
         if self.version:
             with suppress(Exception):
                 schedule = (
-                    self.request.event.schedules.filter(version__iexact=self.version)
+                    # Unconfirmed release candidates are not reachable by
+                    # their version name; attendees keep seeing the current
+                    # confirmed generation until confirmation completes.
+                    self.request.event.schedules.filter(
+                        version__iexact=self.version, published__isnull=False
+                    )
                     .select_related("event")
                     .first()
                 )
@@ -270,7 +275,7 @@ class ScheduleNoJsView(ScheduleView):
     def get_schedule_data(self):
         schedule = self.get_object()
         data = ScheduleData(
-            schedule, with_accepted=not schedule.version, with_breaks=True
+            schedule, with_accepted=not schedule.published, with_breaks=True
         ).data
         for date in data:
             rooms = date.pop("rooms")
@@ -314,6 +319,6 @@ class ChangelogEntryView(EventPermissionRequired, TemplateView):
     @cached_property
     def schedule(self):
         schedule = get_schedule(self.request.event, self.kwargs["version"])
-        if not schedule or not schedule.version:
+        if not schedule or not schedule.published:
             raise Http404
         return schedule

@@ -29,7 +29,7 @@ from pretalx.api.views.mixins import PretalxViewSetMixin
 from pretalx.common.exporter import get_schedule_exporter_content
 from pretalx.schedule.domain.ical import get_slot_ical
 from pretalx.schedule.domain.queries.schedule import get_schedule, public_talk_slots
-from pretalx.schedule.domain.release import freeze_schedule
+from pretalx.schedule.domain.release import ConcurrentReleaseError, freeze_schedule
 from pretalx.schedule.interfaces.responses import CalendarResponse
 from pretalx.schedule.models import Schedule, TalkSlot
 from pretalx.submission.domain.queries.submission import sorted_speakers_prefetch
@@ -177,13 +177,19 @@ class ScheduleViewSet(PretalxViewSetMixin, viewsets.ReadOnlyModelViewSet):
         version_name = serializer.validated_data.get("version")
         comment = serializer.validated_data.get("comment")
 
-        schedule, _ = freeze_schedule(
-            wip_schedule,
-            name=version_name,
-            user=request.user,
-            notify_speakers=False,
-            comment=comment,
-        )
+        try:
+            schedule, _ = freeze_schedule(
+                wip_schedule,
+                name=version_name,
+                user=request.user,
+                notify_speakers=False,
+                comment=comment,
+            )
+        except ConcurrentReleaseError as exc:
+            return Response(
+                {"detail": str(exc)},
+                status=status.HTTP_409_CONFLICT,
+            )
 
         response_serializer = ScheduleSerializer(
             schedule, context=self.get_serializer_context()

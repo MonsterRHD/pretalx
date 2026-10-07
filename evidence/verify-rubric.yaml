@@ -1,0 +1,25 @@
+rubrics:
+  - id: 1
+    type: f2p
+    text: 一次发布为数据库 release、可见 TalkSlot 和新 WIP 分配同一可持久识别的代际。
+  - id: 2
+    type: f2p
+    text: 公开网页、API、feed、导出和相关缓存只读取确认代际并在切换时保持版本一致。
+  - id: 3
+    type: f2p
+    text: 讲者通知固定引用确认日程快照，重试不会因后续 WIP 变化发送不同内容。
+  - id: 4
+    type: f2p
+    text: schedule_release 插件回调按发布代际至多成功一次，失败可重试且不伪装发布完成。
+  - id: 5
+    type: f2p
+    text: 冻结、缓存、邮件或插件阶段失败时上一公开版本继续完整可用，不暴露半发布状态。
+  - id: 6
+    type: f2p
+    text: worker 或进程在任一阶段退出后，重启能继续最新候选或撤销它，并清理孤立 WIP 与缓存。
+  - id: 7
+    type: p2p
+    text: 并发发布、撤回后重发和版本名冲突收敛到唯一当前代际，旧任务不能覆盖新成功版本。
+  - id: 8
+    type: p2p
+    text: notify_speakers=false、普通 WIP 保存和既有网页/API/feed/export 格式保持通过。
